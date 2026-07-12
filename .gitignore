@@ -13,3 +13,6 @@ app/node_modules
 target/deploy/*-keypair.json
 logs/
 .pm2/
+api/agent-keypair.json
+api/node_modules
+api/.env

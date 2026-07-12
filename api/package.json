@@ -1,0 +1,13 @@
+{
+  "name": "willohbets-api",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "gen-keypair": "node scripts/gen-keypair.mjs"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.32.1",
+    "@solana/web3.js": "^1.98.4"
+  }
+}

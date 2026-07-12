@@ -8,7 +8,9 @@
     "pm2:restart": "pm2 restart willohbets --update-env",
     "pm2:rebuild": "bash scripts/pm2-start.sh",
     "pm2:logs": "pm2 logs willohbets",
-    "pm2:status": "pm2 status willohbets"
+    "pm2:status": "pm2 status willohbets",
+    "api:start": "cd api && npm start",
+    "pm2:api": "pm2 start ecosystem.config.cjs --only willohbets-api"
   },
   "dependencies": {
     "@anchor-lang/core": "^0.32.1",

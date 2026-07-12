@@ -862,6 +862,27 @@ export default function App() {
             <p className="mono">{status}</p>
           </section>
         )}
+
+        <section className="card" style={{ opacity: 0.85 }}>
+          <p className="muted small" style={{ margin: 0 }}>
+            Agent API (no browser wallet):{' '}
+            <a
+              href={`${import.meta.env.VITE_API_URL || 'http://localhost:5180'}/openapi.json`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              OpenAPI
+            </a>
+            {' · '}
+            <a
+              href="https://github.com/markoviandevelopments/willohbets/blob/main/docs/AGENT_API.md"
+              target="_blank"
+              rel="noreferrer"
+            >
+              docs
+            </a>
+          </p>
+        </section>
       </main>
     </div>
   )
