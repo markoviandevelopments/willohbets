@@ -228,6 +228,10 @@ export function serializeMarket(publicKey, account) {
 
 // ── Fetch helpers ───────────────────────────────────────────────────────────
 
+const MULTI_BATCH = 100
+/** Avoid getProgramAccounts when combo space fits in a few getMultipleAccounts. */
+const MAX_ORDER_ENUM = 500
+
 async function fetchMarketAccount(program) {
   const [pda] = marketPda()
   try {
@@ -236,6 +240,46 @@ async function fetchMarketAccount(program) {
   } catch {
     return null
   }
+}
+
+/**
+ * getMultipleAccounts by PDA — public free RPCs rate-limit getProgramAccounts
+ * (Anchor `.all()`) aggressively, which made /bets return [] while accounts exist.
+ */
+async function fetchMultipleByKeys(accountClient, keys) {
+  const out = []
+  for (let i = 0; i < keys.length; i += MULTI_BATCH) {
+    const chunk = keys.slice(i, i + MULTI_BATCH)
+    const accounts = await accountClient.fetchMultiple(chunk)
+    for (let j = 0; j < accounts.length; j++) {
+      if (accounts[j]) out.push({ publicKey: chunk[j], account: accounts[j] })
+    }
+  }
+  return out
+}
+
+async function listBetsByMarket(program, nextBetId) {
+  const n = Number(nextBetId) || 0
+  if (n <= 0) return []
+  const keys = []
+  for (let i = 0; i < n; i++) keys.push(betPda(i)[0])
+  return fetchMultipleByKeys(program.account.bet, keys)
+}
+
+async function listOrdersByMarket(program, nextBetId, nextOrderId) {
+  const nBets = Number(nextBetId) || 0
+  const nOrders = Number(nextOrderId) || 0
+  if (nBets <= 0 || nOrders <= 0) return []
+  if (nBets * nOrders > MAX_ORDER_ENUM) {
+    return program.account.order.all()
+  }
+  const keys = []
+  for (let bid = 0; bid < nBets; bid++) {
+    for (let oid = 0; oid < nOrders; oid++) {
+      keys.push(orderPda(bid, oid)[0])
+    }
+  }
+  return fetchMultipleByKeys(program.account.order, keys)
 }
 
 function isOpenOrder(account) {
@@ -260,32 +304,41 @@ export async function getBalance() {
 
 export async function getSnapshot() {
   const program = getProgram()
-  const [marketPdaKey] = marketPda()
+  const marketEntry = await fetchMarketAccount(program)
+  if (!marketEntry) {
+    return { market: null, bets: [], orders: [] }
+  }
 
-  const [marketSettled, betsSettled, ordersSettled] = await Promise.allSettled([
-    program.account.market.fetch(marketPdaKey),
-    program.account.bet.all(),
-    program.account.order.all(),
+  const nextBetId = bnToNum(marketEntry.account.nextBetId)
+  const nextOrderId = bnToNum(marketEntry.account.nextOrderId)
+
+  const [betsSettled, ordersSettled] = await Promise.allSettled([
+    listBetsByMarket(program, nextBetId),
+    listOrdersByMarket(program, nextBetId, nextOrderId),
   ])
 
-  const market =
-    marketSettled.status === 'fulfilled'
-      ? serializeMarket(marketPdaKey, marketSettled.value)
-      : null
+  if (betsSettled.status === 'rejected') {
+    throw betsSettled.reason
+  }
+  if (ordersSettled.status === 'rejected') {
+    // Orders are secondary; still return bets if orders fail
+    console.error('[willohbets-api] listOrders failed:', ordersSettled.reason)
+  }
 
-  const bets =
-    betsSettled.status === 'fulfilled'
-      ? betsSettled.value
-          .map((e) => serializeBet(e.publicKey, e.account))
-          .sort((a, b) => b.betId - a.betId)
-      : []
+  const bets = betsSettled.value
+    .map((e) => serializeBet(e.publicKey, e.account))
+    .sort((a, b) => b.betId - a.betId)
 
   const orders =
     ordersSettled.status === 'fulfilled'
       ? ordersSettled.value.map((e) => serializeOrder(e.publicKey, e.account))
       : []
 
-  return { market, bets, orders }
+  return {
+    market: serializeMarket(marketEntry.publicKey, marketEntry.account),
+    bets,
+    orders,
+  }
 }
 
 export async function getBets() {
@@ -307,7 +360,12 @@ export async function getBet(betId) {
 
 export async function getOpenOrders(betIdFilter) {
   const program = getProgram()
-  const all = await program.account.order.all()
+  const marketEntry = await fetchMarketAccount(program)
+  if (!marketEntry) return []
+
+  const nextBetId = bnToNum(marketEntry.account.nextBetId)
+  const nextOrderId = bnToNum(marketEntry.account.nextOrderId)
+  const all = await listOrdersByMarket(program, nextBetId, nextOrderId)
   let entries = all.filter((e) => isOpenOrder(e.account))
   if (betIdFilter != null && betIdFilter !== '') {
     const id = Number(betIdFilter)

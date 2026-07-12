@@ -78,6 +78,7 @@ export default function App() {
   const [status, setStatus] = useState('')
   const [busy, setBusy] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
 
   const [newBetName, setNewBetName] = useState('')
   const [side, setSide] = useState<'yes' | 'no'>('yes')
@@ -101,7 +102,7 @@ export default function App() {
         const walletPk = wallet.publicKey
         const [balResult, snap] = await Promise.all([
           walletPk
-            ? connection.getBalance(walletPk)
+            ? connection.getBalance(walletPk).catch(() => null as number | null)
             : Promise.resolve(null as number | null),
           fetchMarketSnapshot(connection, {
             force: opts?.force,
@@ -110,11 +111,12 @@ export default function App() {
         ])
 
         if (balResult != null) setBalance(balResult / LAMPORTS_PER_SOL)
-        else setBalance(null)
+        else if (!walletPk) setBalance(null)
 
         setMarketReady(!!snap.market)
         setBets(snap.bets)
         setAllOrders(snap.orders)
+        setLoadError(snap.error ?? '')
 
         if (!snap.market) {
           setOrders([])
@@ -151,6 +153,7 @@ export default function App() {
         }
       } catch (e) {
         console.error(e)
+        setLoadError(e instanceof Error ? e.message : String(e))
       } finally {
         setLoading(false)
       }
@@ -160,7 +163,8 @@ export default function App() {
 
   useEffect(() => {
     void refresh()
-    const t = setInterval(() => void refresh(), 12_000)
+    // Public RPC is tight on rate limits — poll gently
+    const t = setInterval(() => void refresh(), 30_000)
     return () => clearInterval(t)
   }, [refresh])
 
@@ -466,8 +470,16 @@ export default function App() {
               </button>
             </div>
             {loading && <p className="muted">Loading bets…</p>}
-            {!loading && bets.length === 0 && (
+            {!loading && loadError && (
+              <p className="error">
+                RPC load issue (showing last good data if any): {loadError}
+              </p>
+            )}
+            {!loading && bets.length === 0 && !loadError && (
               <p className="muted">No bets yet.</p>
+            )}
+            {!loading && bets.length === 0 && loadError && (
+              <p className="muted">Could not load bets from RPC.</p>
             )}
             <table className="history-table">
               <thead>
@@ -574,6 +586,14 @@ export default function App() {
 
               {loading && (
                 <p className="muted load-hint">Fetching on-chain markets…</p>
+              )}
+              {!loading && loadError && (
+                <p className="error load-hint">
+                  RPC issue (cached data may be shown): {loadError}
+                </p>
+              )}
+              {!loading && !loadError && bets.length === 0 && marketReady && (
+                <p className="muted load-hint">No bets on-chain yet.</p>
               )}
 
               {selected && (

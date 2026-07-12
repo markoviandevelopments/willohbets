@@ -104,10 +104,72 @@ let cache: {
   orders: OrderBookEntry[]
 } | null = null
 
-const CACHE_MS = 4_000
+/** Public free RPCs rate-limit getProgramAccounts hard; keep cache longer. */
+const CACHE_MS = 15_000
+/** Max (nextBetId × nextOrderId) combos for order PDA enumeration. */
+const MAX_ORDER_ENUM = 500
+const MULTI_BATCH = 100
 
 export function invalidateMarketCache() {
   cache = null
+}
+
+/**
+ * Fetch accounts by known PDAs via getMultipleAccounts (cheap).
+ * Avoids program.account.*.all() → getProgramAccounts, which public
+ * Solana devnet RPC frequently 429s ("Too many requests for a specific RPC call").
+ */
+async function fetchMultipleByKeys<T>(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  accountClient: { fetchMultiple: (keys: PublicKey[]) => Promise<(T | null)[]> },
+  keys: PublicKey[],
+): Promise<{ publicKey: PublicKey; account: T }[]> {
+  const out: { publicKey: PublicKey; account: T }[] = []
+  for (let i = 0; i < keys.length; i += MULTI_BATCH) {
+    const chunk = keys.slice(i, i + MULTI_BATCH)
+    const accounts = await accountClient.fetchMultiple(chunk)
+    for (let j = 0; j < accounts.length; j++) {
+      const acc = accounts[j]
+      if (acc) out.push({ publicKey: chunk[j]!, account: acc })
+    }
+  }
+  return out
+}
+
+/** List bets 0..nextBetId-1 by PDA (missing indices are skipped). */
+async function listBetsByMarket(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  program: Program,
+  nextBetId: number,
+): Promise<BetEntry[]> {
+  if (nextBetId <= 0) return []
+  const keys: PublicKey[] = []
+  for (let i = 0; i < nextBetId; i++) keys.push(betPda(i)[0])
+  return fetchMultipleByKeys<BetAccount>(accounts(program).bet, keys)
+}
+
+/**
+ * List orders by enumerating (betId, orderId) PDAs from market counters.
+ * Falls back to getProgramAccounts only if the combo space is huge.
+ */
+async function listOrdersByMarket(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  program: Program,
+  nextBetId: number,
+  nextOrderId: number,
+): Promise<OrderBookEntry[]> {
+  if (nextOrderId <= 0 || nextBetId <= 0) return []
+  const combos = nextBetId * nextOrderId
+  if (combos > MAX_ORDER_ENUM) {
+    return (await accounts(program).order.all()) as OrderBookEntry[]
+  }
+  const keys: PublicKey[] = []
+  for (let bid = 0; bid < nextBetId; bid++) {
+    for (let oid = 0; oid < nextOrderId; oid++) {
+      keys.push(orderPda(bid, oid)[0])
+    }
+  }
+  return fetchMultipleByKeys<OrderAccount>(accounts(program).order, keys)
 }
 
 export function marketPda() {
@@ -181,7 +243,12 @@ export async function fetchAllBets(
   wallet?: AnchorWallet | null,
 ): Promise<BetEntry[]> {
   const program = getProgram(connection, wallet)
-  const all = (await accounts(program).bet.all()) as BetEntry[]
+  const market = await fetchMarket(connection, wallet)
+  if (!market) return []
+  const all = await listBetsByMarket(
+    program,
+    market.account.nextBetId.toNumber(),
+  )
   return all.sort(
     (a, b) => b.account.betId.toNumber() - a.account.betId.toNumber(),
   )
@@ -192,7 +259,13 @@ export async function fetchAllOrders(
   wallet?: AnchorWallet | null,
 ): Promise<OrderBookEntry[]> {
   const program = getProgram(connection, wallet)
-  return (await accounts(program).order.all()) as OrderBookEntry[]
+  const market = await fetchMarket(connection, wallet)
+  if (!market) return []
+  return listOrdersByMarket(
+    program,
+    market.account.nextBetId.toNumber(),
+    market.account.nextOrderId.toNumber(),
+  )
 }
 
 export async function fetchOpenOrders(
@@ -228,8 +301,9 @@ export async function fetchPosition(
 }
 
 /**
- * One parallel RPC burst for market + bets + orders (with short cache).
- * Callers filter orders by betId client-side.
+ * Market + bets + orders with short cache.
+ * Bets/orders load by PDA enumeration (getMultipleAccounts), not getProgramAccounts.
+ * On failure, keep last good cache so the UI does not flash empty.
  */
 export async function fetchMarketSnapshot(
   connection: Connection,
@@ -238,6 +312,7 @@ export async function fetchMarketSnapshot(
   market: { publicKey: PublicKey; account: MarketAccount } | null
   bets: BetEntry[]
   orders: OrderBookEntry[]
+  error?: string
 }> {
   const now = Date.now()
   if (!opts?.force && cache && now - cache.at < CACHE_MS) {
@@ -252,27 +327,71 @@ export async function fetchMarketSnapshot(
   const program = getProgram(connection, wallet)
   const [pda] = marketPda()
 
-  const [marketSettled, betsSettled, ordersSettled] = await Promise.allSettled([
-    accounts(program).market.fetch(pda) as Promise<MarketAccount>,
-    accounts(program).bet.all() as Promise<BetEntry[]>,
-    accounts(program).order.all() as Promise<OrderBookEntry[]>,
-  ])
+  try {
+    const marketAccount = (await accounts(program).market.fetch(
+      pda,
+    )) as MarketAccount
+    const market = { publicKey: pda, account: marketAccount }
+    const nextBetId = marketAccount.nextBetId.toNumber()
+    const nextOrderId = marketAccount.nextOrderId.toNumber()
 
-  const market =
-    marketSettled.status === 'fulfilled'
-      ? { publicKey: pda, account: marketSettled.value }
-      : null
-  const bets =
-    betsSettled.status === 'fulfilled'
+    const [betsSettled, ordersSettled] = await Promise.allSettled([
+      listBetsByMarket(program, nextBetId),
+      listOrdersByMarket(program, nextBetId, nextOrderId),
+    ])
+
+    const betsOk = betsSettled.status === 'fulfilled'
+    const ordersOk = ordersSettled.status === 'fulfilled'
+    const bets = betsOk
       ? [...betsSettled.value].sort(
           (a, b) => b.account.betId.toNumber() - a.account.betId.toNumber(),
         )
-      : []
-  const orders =
-    ordersSettled.status === 'fulfilled' ? ordersSettled.value : []
+      : (cache?.bets ?? [])
+    const orders = ordersOk ? ordersSettled.value : (cache?.orders ?? [])
 
-  cache = { at: now, market, bets, orders }
-  return { market, bets, orders }
+    // Only advance cache timestamp when at least bets succeeded (or both empty markets)
+    if (betsOk || ordersOk || nextBetId === 0) {
+      cache = { at: Date.now(), market, bets, orders }
+    } else if (cache) {
+      cache = { ...cache, market }
+    } else {
+      cache = { at: Date.now(), market, bets, orders }
+    }
+
+    const errs: string[] = []
+    if (!betsOk) {
+      errs.push(
+        betsSettled.reason instanceof Error
+          ? betsSettled.reason.message
+          : String(betsSettled.reason),
+      )
+    }
+    if (!ordersOk) {
+      errs.push(
+        ordersSettled.reason instanceof Error
+          ? ordersSettled.reason.message
+          : String(ordersSettled.reason),
+      )
+    }
+
+    return {
+      market,
+      bets,
+      orders,
+      error: errs.length ? errs.join('; ') : undefined,
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (cache) {
+      return {
+        market: cache.market,
+        bets: cache.bets,
+        orders: cache.orders,
+        error: msg,
+      }
+    }
+    return { market: null, bets: [], orders: [], error: msg }
+  }
 }
 
 export function openOrdersForBet(
