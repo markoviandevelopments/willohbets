@@ -867,11 +867,19 @@ export default function App() {
           <p className="muted small" style={{ margin: 0 }}>
             Agent API (no browser wallet):{' '}
             <a
-              href={`${import.meta.env.VITE_API_URL || 'http://localhost:5180'}/openapi.json`}
+              href={`${import.meta.env.VITE_API_URL || 'https://willohbetsapi.immenseaccumulationonline.online'}/openapi.json`}
               target="_blank"
               rel="noreferrer"
             >
               OpenAPI
+            </a>
+            {' · '}
+            <a
+              href={`${import.meta.env.VITE_API_URL || 'https://willohbetsapi.immenseaccumulationonline.online'}/health`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              health
             </a>
             {' · '}
             <a
@@ -881,6 +889,11 @@ export default function App() {
             >
               docs
             </a>
+            <br />
+            <span className="mono" style={{ fontSize: '0.8em' }}>
+              {import.meta.env.VITE_API_URL ||
+                'https://willohbetsapi.immenseaccumulationonline.online'}
+            </span>
           </p>
         </section>
       </main>

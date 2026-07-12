@@ -8,12 +8,12 @@ You trade with **curl** or **fetch** only — no browser wallet needed.
 
 | Environment | URL |
 |-------------|-----|
-| Local default | `http://localhost:5180` |
-| Bind all interfaces | `http://HOST:5180` (see `HOST` / `PORT` env) |
-| Production | Set your Cloudflare / reverse-proxy URL if the API is exposed |
+| **Public (Cloudflare)** | `https://willohbetsapi.immenseaccumulationonline.online` |
+| Local on host | `http://localhost:5180` |
+| Tunnel origin | Cloudflare → `http://localhost:5180` |
 
-OpenAPI: `GET /openapi.json`  
-Health: `GET /health`
+OpenAPI: https://willohbetsapi.immenseaccumulationonline.online/openapi.json  
+Health: https://willohbetsapi.immenseaccumulationonline.online/health
 
 Program ID: `BPpvi9mmM8yzVbGofQARnsDjxdvVXioEbE5UB2F24uJb` (devnet)
 
@@ -89,7 +89,8 @@ Successful writes always include a Solana `signature` string.
 Set a base for convenience:
 
 ```bash
-export API=http://localhost:5180
+export API=https://willohbetsapi.immenseaccumulationonline.online
+# Local host only: export API=http://localhost:5180
 # export API_KEY=change-me   # if server has WILLOHBETS_API_KEY
 # H=(-H "X-Api-Key: $API_KEY")
 ```
@@ -196,7 +197,9 @@ curl -s -X POST ${API_KEY:+-H "X-Api-Key: $API_KEY"} \
 ## fetch (Node / agent)
 
 ```js
-const API = process.env.WILLOH_API || 'http://localhost:5180'
+const API =
+  process.env.WILLOH_API ||
+  'https://willohbetsapi.immenseaccumulationonline.online'
 const headers = {
   'Content-Type': 'application/json',
   ...(process.env.WILLOHBETS_API_KEY

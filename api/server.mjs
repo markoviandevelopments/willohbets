@@ -115,7 +115,16 @@ function openApiSpec() {
       description:
         'HTTP API for AI agents to trade WillohBets prediction markets on Solana without a browser wallet. Server signs txs with a configured keypair.',
     },
-    servers: [{ url: `http://localhost:${PORT}`, description: 'Local agent API' }],
+    servers: [
+      {
+        url: 'https://willohbetsapi.immenseaccumulationonline.online',
+        description: 'Public Cloudflare tunnel',
+      },
+      {
+        url: `http://localhost:${PORT}`,
+        description: 'Local agent API',
+      },
+    ],
     components: {
       securitySchemes: {
         ApiKey: {

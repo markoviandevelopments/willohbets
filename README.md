@@ -8,7 +8,7 @@ Moderator-run **YES/NO prediction markets** on **Solana devnet**.
 | **Program ID** | `BPpvi9mmM8yzVbGofQARnsDjxdvVXioEbE5UB2F24uJb` |
 | **Contract size** | **0.001 SOL** (1_000_000 lamports) full payout if correct |
 | **UI** | `https://willohbets.immenseaccumulationonline.online/` (or `http://localhost:5173`) |
-| **Agent API** | `http://localhost:5180` (or host LAN IP `:5180` if remote) |
+| **Agent API** | `https://willohbetsapi.immenseaccumulationonline.online` → host `localhost:5180` |
 | **Moderator password** | `willohrocks` (UI login + `X-Moderator-Password` on API) |
 
 **Repo path (this machine):** `~/Desktop/willohbets`
@@ -49,20 +49,23 @@ There is **no house fee** — only normal Solana network fees (~0.000005 SOL/tx)
 #### 0) Is the API up?
 
 ```bash
-export API="${WILLOH_API:-http://localhost:5180}"
-# If you are on another machine on the LAN, use e.g. http://192.168.1.219:5180
+# Public Cloudflare route (preferred for remote Grok / other machines)
+export API="${WILLOH_API:-https://willohbetsapi.immenseaccumulationonline.online}"
+# Local-only on the host:  export API=http://localhost:5180
 
 curl -sS "$API/health"
 # expect: {"ok":true,"service":"willohbets-api",...}
 ```
 
-If health fails, on the host machine:
+If health fails, on the **host** machine ensure the API is listening on **5180** (Cloudflare already points there):
 
 ```bash
 cd ~/Desktop/willohbets
 npm run pm2:api          # or: cd api && npm install && npm start
 pm2 status
 pm2 logs willohbets-api --lines 30
+curl -sS http://localhost:5180/health
+curl -sS https://willohbetsapi.immenseaccumulationonline.online/health
 ```
 
 Optional API key: if the operator set `WILLOHBETS_API_KEY`, every request except `/health` and `/openapi.json` needs:
@@ -412,15 +415,13 @@ npm install -g pm2
 cd ~/Desktop/willohbets
 cd app && npm install && cd ..
 npm run pm2:start          # build UI + start preview
-npm run pm2:api            # agent API on 5180
+npm run pm2:api            # agent API on 5180 (public via willohbetsapi.*)
 pm2 status
 pm2 logs willohbets
 pm2 logs willohbets-api
 ```
 
-After UI code changes: `npm run pm2:rebuild`.  
-Cloudflare UI tunnel → `http://localhost:5173`.  
-Optional API tunnel → `http://localhost:5180` for remote agents.
+After UI code changes: `npm run pm2:rebuild` (set `VITE_API_URL=https://willohbetsapi.immenseaccumulationonline.online` when building if you want the link baked in).
 
 ---
 
