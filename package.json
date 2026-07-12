@@ -2,7 +2,13 @@
   "license": "ISC",
   "scripts": {
     "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w",
-    "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check"
+    "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check",
+    "pm2:start": "bash scripts/pm2-start.sh",
+    "pm2:stop": "pm2 stop willohbets",
+    "pm2:restart": "pm2 restart willohbets --update-env",
+    "pm2:rebuild": "bash scripts/pm2-start.sh",
+    "pm2:logs": "pm2 logs willohbets",
+    "pm2:status": "pm2 status willohbets"
   },
   "dependencies": {
     "@anchor-lang/core": "^0.32.1",

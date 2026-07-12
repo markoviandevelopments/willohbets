@@ -11,3 +11,5 @@ app/node_modules
 **/.env
 *.pem
 target/deploy/*-keypair.json
+logs/
+.pm2/

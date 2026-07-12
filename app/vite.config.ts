@@ -11,11 +11,16 @@ export default defineConfig({
     }),
   ],
   server: {
-    allowedHosts: [
-      'willohbest.immenseaccumulationonline.online',
-      'solana.immenseaccumulationonline.online',
-      '.immenseaccumulationonline.online',
-    ],
-    host: true,
+    // Allow Cloudflare tunnel / custom domains (dev only)
+    allowedHosts: true,
+    host: '0.0.0.0',
+    port: 5173,
+    strictPort: true, // fail if 5173 busy (don't jump to 5174)
+  },
+  preview: {
+    allowedHosts: true,
+    host: '0.0.0.0',
+    port: 5173,
+    strictPort: true,
   },
 })

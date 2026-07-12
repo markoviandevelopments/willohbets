@@ -15,15 +15,59 @@ Moderator-run prediction markets on **Solana devnet**.
 | Program ID | `BPpvi9mmM8yzVbGofQARnsDjxdvVXioEbE5UB2F24uJb` |
 | Contract | 0.001 SOL |
 
-## Run UI
+## Run UI (PM2 — recommended)
+
+Serves a **production build** (`vite preview`) on **port 5173**.
+
+> **Why not `vite` dev under PM2?** Dev mode + wallet-adapter often exceeds
+> 512MB; with `max_memory_restart` PM2 kills and restarts it every ~30s even
+> though the app looks “healthy”. Preview is lighter and stays up.
+
+```bash
+# once
+npm install -g pm2
+cd ~/Desktop/willohbets
+cd app && npm install && cd ..
+
+# build + start (or rebuild + restart)
+npm run pm2:start
+
+pm2 status
+pm2 logs willohbets
+pm2 stop willohbets
+
+# after UI code changes: rebuild and restart
+npm run pm2:rebuild
+
+# survive reboots
+pm2 save
+pm2 startup   # run the command it prints
+```
+
+Config: [`ecosystem.config.cjs`](./ecosystem.config.cjs)  
+Logs: `logs/willohbets-out.log`, `logs/willohbets-error.log`
+
+If port 5173 is busy:
+
+```bash
+pm2 delete willohbets
+fuser -k 5173/tcp 2>/dev/null || true
+npm run pm2:start
+```
+
+Point Cloudflare Tunnel at `http://localhost:5173`.
+
+Public host: `https://willohbets.immenseaccumulationonline.online/`
+
+### Manual (no PM2)
 
 ```bash
 cd app
 npm install
-npm run dev -- --host 0.0.0.0 --port 5173
+npm run build && npm run preview
+# or hot-reload dev:
+npm run dev
 ```
-
-Public host (Cloudflare): `https://willohbest.immenseaccumulationonline.online/`
 
 ## Moderator
 
