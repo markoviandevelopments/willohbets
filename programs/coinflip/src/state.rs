@@ -48,6 +48,10 @@ pub struct Position {
     pub owner: Pubkey,
     pub yes_contracts: u64,
     pub no_contracts: u64,
+    /// Total lamports paid for YES contracts (for avg price).
+    pub yes_cost_lamports: u64,
+    /// Total lamports paid for NO contracts (for avg price).
+    pub no_cost_lamports: u64,
     pub claimed: bool,
     pub bump: u8,
 }

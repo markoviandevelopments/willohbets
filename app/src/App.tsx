@@ -9,6 +9,8 @@ import { LAMPORTS_PER_SOL } from '@solana/web3.js'
 import {
   CONTRACT_SOL,
   MODERATOR_PASSWORD,
+  avgPricePercent,
+  avgPriceSol,
   betIsOpen,
   cancelOrder,
   claim,
@@ -37,6 +39,16 @@ type Tab = 'trade' | 'history' | 'mod'
 
 function short(pk: string) {
   return `${pk.slice(0, 4)}…${pk.slice(-4)}`
+}
+
+function formatAvg(
+  cost: { toNumber(): number } | number,
+  qty: { toNumber(): number } | number,
+) {
+  const pct = avgPricePercent(cost as never, qty as never)
+  const sol = avgPriceSol(cost as never, qty as never)
+  if (pct == null || sol == null) return 'avg —'
+  return `avg ${pct.toFixed(1)}% (${sol.toFixed(6)} SOL)`
 }
 
 function fmtTime(ts: number) {
@@ -614,10 +626,31 @@ export default function App() {
                   {position ? (
                     <ul className="pos">
                       <li>
-                        YES: <strong>{position.yesContracts.toString()}</strong>
+                        <div className="pos-row">
+                          <span>
+                            YES:{' '}
+                            <strong>{position.yesContracts.toString()}</strong>
+                          </span>
+                          <span className="muted small">
+                            {formatAvg(
+                              position.yesCostLamports,
+                              position.yesContracts,
+                            )}
+                          </span>
+                        </div>
                       </li>
                       <li>
-                        NO: <strong>{position.noContracts.toString()}</strong>
+                        <div className="pos-row">
+                          <span>
+                            NO: <strong>{position.noContracts.toString()}</strong>
+                          </span>
+                          <span className="muted small">
+                            {formatAvg(
+                              position.noCostLamports,
+                              position.noContracts,
+                            )}
+                          </span>
+                        </div>
                       </li>
                       <li>
                         Claimed:{' '}

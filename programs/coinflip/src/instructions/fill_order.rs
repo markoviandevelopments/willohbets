@@ -105,9 +105,38 @@ pub fn fill_order_handler(ctx: Context<FillOrder>, fill_qty: u64) -> Result<()> 
         taker_escrow,
     )?;
 
-    let (maker_yes, maker_no, taker_yes, taker_no) = match order.side {
-        Side::Yes => (fill_qty, 0u64, 0u64, fill_qty),
-        Side::No => (0u64, fill_qty, fill_qty, 0u64),
+    // Maker keeps their posted side; taker takes the opposite.
+    // Cost basis = lamports each side locked for this fill.
+    let (
+        maker_yes,
+        maker_no,
+        maker_yes_cost,
+        maker_no_cost,
+        taker_yes,
+        taker_no,
+        taker_yes_cost,
+        taker_no_cost,
+    ) = match order.side {
+        Side::Yes => (
+            fill_qty,
+            0u64,
+            maker_portion,
+            0u64,
+            0u64,
+            fill_qty,
+            0u64,
+            taker_escrow,
+        ),
+        Side::No => (
+            0u64,
+            fill_qty,
+            0u64,
+            maker_portion,
+            fill_qty,
+            0u64,
+            taker_escrow,
+            0u64,
+        ),
     };
 
     let bet_id = order.bet_id;
@@ -118,6 +147,8 @@ pub fn fill_order_handler(ctx: Context<FillOrder>, fill_qty: u64) -> Result<()> 
             mp.owner = ctx.accounts.maker.key();
             mp.yes_contracts = 0;
             mp.no_contracts = 0;
+            mp.yes_cost_lamports = 0;
+            mp.no_cost_lamports = 0;
             mp.claimed = false;
             mp.bump = ctx.bumps.maker_position;
         }
@@ -129,6 +160,14 @@ pub fn fill_order_handler(ctx: Context<FillOrder>, fill_qty: u64) -> Result<()> 
             .no_contracts
             .checked_add(maker_no)
             .ok_or(MarketError::MathOverflow)?;
+        mp.yes_cost_lamports = mp
+            .yes_cost_lamports
+            .checked_add(maker_yes_cost)
+            .ok_or(MarketError::MathOverflow)?;
+        mp.no_cost_lamports = mp
+            .no_cost_lamports
+            .checked_add(maker_no_cost)
+            .ok_or(MarketError::MathOverflow)?;
     }
     {
         let tp = &mut ctx.accounts.taker_position;
@@ -137,6 +176,8 @@ pub fn fill_order_handler(ctx: Context<FillOrder>, fill_qty: u64) -> Result<()> 
             tp.owner = ctx.accounts.taker.key();
             tp.yes_contracts = 0;
             tp.no_contracts = 0;
+            tp.yes_cost_lamports = 0;
+            tp.no_cost_lamports = 0;
             tp.claimed = false;
             tp.bump = ctx.bumps.taker_position;
         }
@@ -147,6 +188,14 @@ pub fn fill_order_handler(ctx: Context<FillOrder>, fill_qty: u64) -> Result<()> 
         tp.no_contracts = tp
             .no_contracts
             .checked_add(taker_no)
+            .ok_or(MarketError::MathOverflow)?;
+        tp.yes_cost_lamports = tp
+            .yes_cost_lamports
+            .checked_add(taker_yes_cost)
+            .ok_or(MarketError::MathOverflow)?;
+        tp.no_cost_lamports = tp
+            .no_cost_lamports
+            .checked_add(taker_no_cost)
             .ok_or(MarketError::MathOverflow)?;
     }
 

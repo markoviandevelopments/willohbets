@@ -14,4 +14,5 @@ pub const MARKET_SEED: &[u8] = b"willoh_market";
 pub const VAULT_SEED: &[u8] = b"willoh_vault";
 pub const BET_SEED: &[u8] = b"willoh_bet";
 pub const ORDER_SEED: &[u8] = b"willoh_order";
-pub const POSITION_SEED: &[u8] = b"willoh_pos";
+/// v2 includes cost basis fields for average fill price.
+pub const POSITION_SEED: &[u8] = b"willoh_pos_v2";

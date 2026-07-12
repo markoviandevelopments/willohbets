@@ -367,6 +367,14 @@ button:disabled {
   border-bottom: 1px solid var(--border);
 }
 
+.pos-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
 .mod-form {
   display: flex;
   gap: 0.5rem;

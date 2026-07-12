@@ -237,7 +237,10 @@
                   95,
                   112,
                   111,
-                  115
+                  115,
+                  95,
+                  118,
+                  50
                 ]
               },
               {
@@ -496,7 +499,10 @@
                   95,
                   112,
                   111,
-                  115
+                  115,
+                  95,
+                  118,
+                  50
                 ]
               },
               {
@@ -528,7 +534,10 @@
                   95,
                   112,
                   111,
-                  115
+                  115,
+                  95,
+                  118,
+                  50
                 ]
               },
               {
@@ -1223,6 +1232,20 @@
           },
           {
             "name": "no_contracts",
+            "type": "u64"
+          },
+          {
+            "name": "yes_cost_lamports",
+            "docs": [
+              "Total lamports paid for YES contracts (for avg price)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "no_cost_lamports",
+            "docs": [
+              "Total lamports paid for NO contracts (for avg price)."
+            ],
             "type": "u64"
           },
           {

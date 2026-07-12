@@ -60,6 +60,8 @@ export type PositionAccount = {
   owner: PublicKey
   yesContracts: BN
   noContracts: BN
+  yesCostLamports: BN
+  noCostLamports: BN
   claimed: boolean
   bump: number
 }
@@ -112,9 +114,26 @@ export function orderPda(betId: number | BN, orderId: number | BN) {
 export function positionPda(betId: number | BN, owner: PublicKey) {
   const b = BN.isBN(betId) ? betId : new BN(betId)
   return PublicKey.findProgramAddressSync(
-    [Buffer.from('willoh_pos'), b.toArrayLike(Buffer, 'le', 8), owner.toBuffer()],
+    [Buffer.from('willoh_pos_v2'), b.toArrayLike(Buffer, 'le', 8), owner.toBuffer()],
     PROGRAM_ID,
   )
+}
+
+/** Average fill price as % of full contract payout (0–100). */
+export function avgPricePercent(costLamports: BN | number, contracts: BN | number): number | null {
+  const cost = typeof costLamports === 'number' ? costLamports : costLamports.toNumber()
+  const qty = typeof contracts === 'number' ? contracts : contracts.toNumber()
+  if (qty <= 0) return null
+  // cost / (qty * CONTRACT) * 100
+  return (cost / (qty * CONTRACT_LAMPORTS)) * 100
+}
+
+/** Average SOL paid per contract. */
+export function avgPriceSol(costLamports: BN | number, contracts: BN | number): number | null {
+  const cost = typeof costLamports === 'number' ? costLamports : costLamports.toNumber()
+  const qty = typeof contracts === 'number' ? contracts : contracts.toNumber()
+  if (qty <= 0) return null
+  return cost / qty / 1e9
 }
 
 export async function fetchMarket(connection: Connection, wallet: AnchorWallet) {
