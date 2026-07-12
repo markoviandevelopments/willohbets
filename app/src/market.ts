@@ -69,8 +69,18 @@ export type PositionAccount = {
 export type BetEntry = { publicKey: PublicKey; account: BetAccount }
 export type OrderBookEntry = { publicKey: PublicKey; account: OrderAccount }
 
-export function getProgram(connection: Connection, wallet: AnchorWallet) {
-  const provider = new AnchorProvider(connection, wallet, {
+/** Dummy wallet for read-only account fetches (no signature needed). */
+function readonlyWallet(): AnchorWallet {
+  const pk = PublicKey.default
+  return {
+    publicKey: pk,
+    signTransaction: async (tx) => tx,
+    signAllTransactions: async (txs) => txs,
+  } as AnchorWallet
+}
+
+export function getProgram(connection: Connection, wallet?: AnchorWallet | null) {
+  const provider = new AnchorProvider(connection, wallet ?? readonlyWallet(), {
     commitment: 'confirmed',
     preflightCommitment: 'confirmed',
   })
@@ -84,6 +94,20 @@ function methods(program: Program): any {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function accounts(program: Program): any {
   return program.account
+}
+
+/** In-memory cache so refresh doesn't re-hit RPC for every piece. */
+let cache: {
+  at: number
+  market: { publicKey: PublicKey; account: MarketAccount } | null
+  bets: BetEntry[]
+  orders: OrderBookEntry[]
+} | null = null
+
+const CACHE_MS = 4_000
+
+export function invalidateMarketCache() {
+  cache = null
 }
 
 export function marketPda() {
@@ -136,7 +160,10 @@ export function avgPriceSol(costLamports: BN | number, contracts: BN | number): 
   return cost / qty / 1e9
 }
 
-export async function fetchMarket(connection: Connection, wallet: AnchorWallet) {
+export async function fetchMarket(
+  connection: Connection,
+  wallet?: AnchorWallet | null,
+) {
   const program = getProgram(connection, wallet)
   const [pda] = marketPda()
   try {
@@ -151,7 +178,7 @@ export async function fetchMarket(connection: Connection, wallet: AnchorWallet) 
 
 export async function fetchAllBets(
   connection: Connection,
-  wallet: AnchorWallet,
+  wallet?: AnchorWallet | null,
 ): Promise<BetEntry[]> {
   const program = getProgram(connection, wallet)
   const all = (await accounts(program).bet.all()) as BetEntry[]
@@ -160,13 +187,20 @@ export async function fetchAllBets(
   )
 }
 
-export async function fetchOpenOrders(
+export async function fetchAllOrders(
   connection: Connection,
-  wallet: AnchorWallet,
-  betId: number,
+  wallet?: AnchorWallet | null,
 ): Promise<OrderBookEntry[]> {
   const program = getProgram(connection, wallet)
-  const all = (await accounts(program).order.all()) as OrderBookEntry[]
+  return (await accounts(program).order.all()) as OrderBookEntry[]
+}
+
+export async function fetchOpenOrders(
+  connection: Connection,
+  wallet: AnchorWallet | null | undefined,
+  betId: number,
+): Promise<OrderBookEntry[]> {
+  const all = await fetchAllOrders(connection, wallet)
   return all.filter(
     (o) =>
       o.account.betId.toNumber() === betId &&
@@ -177,7 +211,7 @@ export async function fetchOpenOrders(
 
 export async function fetchPosition(
   connection: Connection,
-  wallet: AnchorWallet,
+  wallet: AnchorWallet | null | undefined,
   betId: number,
   owner: PublicKey,
 ) {
@@ -193,6 +227,66 @@ export async function fetchPosition(
   }
 }
 
+/**
+ * One parallel RPC burst for market + bets + orders (with short cache).
+ * Callers filter orders by betId client-side.
+ */
+export async function fetchMarketSnapshot(
+  connection: Connection,
+  opts?: { force?: boolean; wallet?: AnchorWallet | null },
+): Promise<{
+  market: { publicKey: PublicKey; account: MarketAccount } | null
+  bets: BetEntry[]
+  orders: OrderBookEntry[]
+}> {
+  const now = Date.now()
+  if (!opts?.force && cache && now - cache.at < CACHE_MS) {
+    return {
+      market: cache.market,
+      bets: cache.bets,
+      orders: cache.orders,
+    }
+  }
+
+  const wallet = opts?.wallet ?? null
+  const program = getProgram(connection, wallet)
+  const [pda] = marketPda()
+
+  const [marketSettled, betsSettled, ordersSettled] = await Promise.allSettled([
+    accounts(program).market.fetch(pda) as Promise<MarketAccount>,
+    accounts(program).bet.all() as Promise<BetEntry[]>,
+    accounts(program).order.all() as Promise<OrderBookEntry[]>,
+  ])
+
+  const market =
+    marketSettled.status === 'fulfilled'
+      ? { publicKey: pda, account: marketSettled.value }
+      : null
+  const bets =
+    betsSettled.status === 'fulfilled'
+      ? [...betsSettled.value].sort(
+          (a, b) => b.account.betId.toNumber() - a.account.betId.toNumber(),
+        )
+      : []
+  const orders =
+    ordersSettled.status === 'fulfilled' ? ordersSettled.value : []
+
+  cache = { at: now, market, bets, orders }
+  return { market, bets, orders }
+}
+
+export function openOrdersForBet(
+  orders: OrderBookEntry[],
+  betId: number,
+): OrderBookEntry[] {
+  return orders.filter(
+    (o) =>
+      o.account.betId.toNumber() === betId &&
+      'open' in o.account.status &&
+      o.account.qtyRemaining.toNumber() > 0,
+  )
+}
+
 export async function initializeMarket(
   connection: Connection,
   wallet: AnchorWallet,
@@ -200,7 +294,7 @@ export async function initializeMarket(
   const program = getProgram(connection, wallet)
   const [market] = marketPda()
   const [vault] = vaultPda()
-  return methods(program)
+  const sig = await methods(program)
     .initializeMarket()
     .accounts({
       authority: wallet.publicKey,
@@ -209,6 +303,8 @@ export async function initializeMarket(
       systemProgram: SystemProgram.programId,
     })
     .rpc()
+  invalidateMarketCache()
+  return sig
 }
 
 export async function createBet(
@@ -221,7 +317,7 @@ export async function createBet(
   if (!market) throw new Error('Market not initialized')
   const betId = market.account.nextBetId.toNumber()
   const [bet] = betPda(betId)
-  return methods(program)
+  const sig = await methods(program)
     .createBet(name)
     .accounts({
       creator: wallet.publicKey,
@@ -230,6 +326,8 @@ export async function createBet(
       systemProgram: SystemProgram.programId,
     })
     .rpc()
+  invalidateMarketCache()
+  return sig
 }
 
 export async function placeOrder(
@@ -248,7 +346,7 @@ export async function placeOrder(
   const [order] = orderPda(betId, orderId)
   const [vault] = vaultPda()
   const sideArg = side === 'yes' ? { yes: {} } : { no: {} }
-  return methods(program)
+  const sig = await methods(program)
     .placeOrder(new BN(betId), sideArg, new BN(priceBps), new BN(quantity))
     .accounts({
       owner: wallet.publicKey,
@@ -259,6 +357,8 @@ export async function placeOrder(
       systemProgram: SystemProgram.programId,
     })
     .rpc()
+  invalidateMarketCache()
+  return sig
 }
 
 export async function fillOrder(
@@ -276,7 +376,7 @@ export async function fillOrder(
   const maker = orderEntry.account.owner
   const [makerPosition] = positionPda(betId, maker)
   const [takerPosition] = positionPda(betId, wallet.publicKey)
-  return methods(program)
+  const sig = await methods(program)
     .fillOrder(new BN(fillQty))
     .accounts({
       taker: wallet.publicKey,
@@ -290,6 +390,8 @@ export async function fillOrder(
       systemProgram: SystemProgram.programId,
     })
     .rpc()
+  invalidateMarketCache()
+  return sig
 }
 
 export async function cancelOrder(
@@ -301,7 +403,7 @@ export async function cancelOrder(
   const [market] = marketPda()
   const [bet] = betPda(orderEntry.account.betId)
   const [vault] = vaultPda()
-  return methods(program)
+  const sig = await methods(program)
     .cancelOrder()
     .accounts({
       owner: wallet.publicKey,
@@ -312,6 +414,8 @@ export async function cancelOrder(
       systemProgram: SystemProgram.programId,
     })
     .rpc()
+  invalidateMarketCache()
+  return sig
 }
 
 export async function settleBet(
@@ -329,7 +433,7 @@ export async function settleBet(
       : outcome === 'no'
         ? { no: {} }
         : { void: {} }
-  return methods(program)
+  const sig = await methods(program)
     .settleBet(outcomeArg)
     .accounts({
       settler: wallet.publicKey,
@@ -337,6 +441,8 @@ export async function settleBet(
       bet,
     })
     .rpc()
+  invalidateMarketCache()
+  return sig
 }
 
 export async function claim(
@@ -349,7 +455,7 @@ export async function claim(
   const [bet] = betPda(betId)
   const [position] = positionPda(betId, wallet.publicKey)
   const [vault] = vaultPda()
-  return methods(program)
+  const sig = await methods(program)
     .claim()
     .accounts({
       owner: wallet.publicKey,
@@ -360,6 +466,8 @@ export async function claim(
       systemProgram: SystemProgram.programId,
     })
     .rpc()
+  invalidateMarketCache()
+  return sig
 }
 
 export function sideIsYes(side: Side): boolean {

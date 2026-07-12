@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   useConnection,
   useWallet,
@@ -16,14 +16,14 @@ import {
   claim,
   createBet,
   escrowForOrder,
-  fetchAllBets,
-  fetchMarket,
-  fetchOpenOrders,
+  fetchMarketSnapshot,
   fetchPosition,
   fillOrder,
   initializeMarket,
+  invalidateMarketCache,
   isModeratorSession,
   markPositionAgainstBook,
+  openOrdersForBet,
   outcomeLabel,
   placeOrder,
   setModeratorSession,
@@ -71,11 +71,13 @@ export default function App() {
   const [balance, setBalance] = useState<number | null>(null)
   const [marketReady, setMarketReady] = useState(false)
   const [bets, setBets] = useState<BetEntry[]>([])
+  const [allOrders, setAllOrders] = useState<OrderBookEntry[]>([])
   const [selectedBetId, setSelectedBetId] = useState<number | null>(null)
   const [orders, setOrders] = useState<OrderBookEntry[]>([])
   const [position, setPosition] = useState<PositionAccount | null>(null)
   const [status, setStatus] = useState('')
   const [busy, setBusy] = useState(false)
+  const [loading, setLoading] = useState(true)
 
   const [newBetName, setNewBetName] = useState('')
   const [side, setSide] = useState<'yes' | 'no'>('yes')
@@ -83,78 +85,115 @@ export default function App() {
   const [qty, setQty] = useState(1)
   const [fillQty, setFillQty] = useState<Record<string, number>>({})
 
+  const selectedBetIdRef = useRef(selectedBetId)
+  selectedBetIdRef.current = selectedBetId
+
   const openBets = useMemo(() => bets.filter((b) => betIsOpen(b.account)), [bets])
   const selected = useMemo(
     () => bets.find((b) => b.account.betId.toNumber() === selectedBetId) ?? null,
     [bets, selectedBetId],
   )
 
-  const refresh = useCallback(async () => {
-    if (!wallet.publicKey || !wallet.signTransaction) {
-      setBalance(null)
-      return
-    }
-    try {
-      const bal = await connection.getBalance(wallet.publicKey)
-      setBalance(bal / LAMPORTS_PER_SOL)
-      const m = await fetchMarket(connection, aw)
-      setMarketReady(!!m)
-      if (!m) {
-        setBets([])
-        setOrders([])
-        setPosition(null)
-        return
+  const refresh = useCallback(
+    async (opts?: { force?: boolean }) => {
+      try {
+        // Parallel: balance (if wallet) + market snapshot (bets+orders together)
+        const walletPk = wallet.publicKey
+        const [balResult, snap] = await Promise.all([
+          walletPk
+            ? connection.getBalance(walletPk)
+            : Promise.resolve(null as number | null),
+          fetchMarketSnapshot(connection, {
+            force: opts?.force,
+            wallet: wallet.signTransaction ? aw : null,
+          }),
+        ])
+
+        if (balResult != null) setBalance(balResult / LAMPORTS_PER_SOL)
+        else setBalance(null)
+
+        setMarketReady(!!snap.market)
+        setBets(snap.bets)
+        setAllOrders(snap.orders)
+
+        if (!snap.market) {
+          setOrders([])
+          setPosition(null)
+          return
+        }
+
+        const current = selectedBetIdRef.current
+        const preferred =
+          current != null &&
+          snap.bets.some((b) => b.account.betId.toNumber() === current)
+            ? current
+            : snap.bets.find((b) => betIsOpen(b.account))?.account.betId
+                .toNumber() ??
+              snap.bets[0]?.account.betId.toNumber() ??
+              null
+
+        if (preferred !== selectedBetIdRef.current) {
+          setSelectedBetId(preferred)
+        }
+
+        const betId = preferred
+        if (betId != null) {
+          setOrders(openOrdersForBet(snap.orders, betId))
+          if (walletPk) {
+            const p = await fetchPosition(connection, aw, betId, walletPk)
+            setPosition(p?.account ?? null)
+          } else {
+            setPosition(null)
+          }
+        } else {
+          setOrders([])
+          setPosition(null)
+        }
+      } catch (e) {
+        console.error(e)
+      } finally {
+        setLoading(false)
       }
-      const all = await fetchAllBets(connection, aw)
-      setBets(all)
-      const preferred =
-        selectedBetId != null &&
-        all.some((b) => b.account.betId.toNumber() === selectedBetId)
-          ? selectedBetId
-          : all.find((b) => betIsOpen(b.account))?.account.betId.toNumber() ??
-            all[0]?.account.betId.toNumber() ??
-            null
-      if (preferred !== selectedBetId) setSelectedBetId(preferred)
-      const betId = preferred
-      if (betId != null) {
-        const o = await fetchOpenOrders(connection, aw, betId)
-        setOrders(o)
-        const p = await fetchPosition(connection, aw, betId, wallet.publicKey)
-        setPosition(p?.account ?? null)
-      } else {
-        setOrders([])
-        setPosition(null)
-      }
-    } catch (e) {
-      console.error(e)
-    }
-  }, [connection, wallet, aw, selectedBetId])
+    },
+    [connection, wallet.publicKey, wallet.signTransaction, aw],
+  )
 
   useEffect(() => {
     void refresh()
-    const t = setInterval(() => void refresh(), 10_000)
+    const t = setInterval(() => void refresh(), 12_000)
     return () => clearInterval(t)
   }, [refresh])
 
-  // Reload book when selection changes
+  // When user picks another bet, filter orders locally (instant) then fetch position
   useEffect(() => {
-    if (!wallet.publicKey || !wallet.signTransaction || selectedBetId == null) return
+    if (selectedBetId == null) {
+      setOrders([])
+      setPosition(null)
+      return
+    }
+    setOrders(openOrdersForBet(allOrders, selectedBetId))
+    if (!wallet.publicKey) {
+      setPosition(null)
+      return
+    }
+    let cancelled = false
     void (async () => {
       try {
-        const o = await fetchOpenOrders(connection, aw, selectedBetId)
-        setOrders(o)
         const p = await fetchPosition(
           connection,
           aw,
           selectedBetId,
           wallet.publicKey!,
         )
-        setPosition(p?.account ?? null)
+        if (!cancelled) setPosition(p?.account ?? null)
       } catch (e) {
         console.error(e)
       }
     })()
-  }, [selectedBetId, connection, aw, wallet.publicKey, wallet.signTransaction])
+    return () => {
+      cancelled = true
+    }
+  }, [selectedBetId, allOrders, connection, aw, wallet.publicKey])
 
   const run = async (label: string, fn: () => Promise<string>) => {
     if (!wallet.publicKey || !wallet.signTransaction) {
@@ -166,7 +205,8 @@ export default function App() {
     try {
       const sig = await fn()
       setStatus(`${label} ✓ ${short(sig)}`)
-      await refresh()
+      invalidateMarketCache()
+      await refresh({ force: true })
     } catch (e: unknown) {
       setStatus(`Failed: ${e instanceof Error ? e.message : String(e)}`)
       console.error(e)
@@ -419,16 +459,14 @@ export default function App() {
               <button
                 className="ghost"
                 type="button"
-                disabled={busy}
-                onClick={() => void refresh()}
+                disabled={busy || loading}
+                onClick={() => void refresh({ force: true })}
               >
                 Refresh
               </button>
             </div>
-            {!wallet.connected && (
-              <p className="muted">Connect a wallet to load on-chain history.</p>
-            )}
-            {wallet.connected && bets.length === 0 && (
+            {loading && <p className="muted">Loading bets…</p>}
+            {!loading && bets.length === 0 && (
               <p className="muted">No bets yet.</p>
             )}
             <table className="history-table">
@@ -511,13 +549,16 @@ export default function App() {
                 <span>Select market</span>
                 <select
                   value={selectedBetId ?? ''}
+                  disabled={loading}
                   onChange={(e) =>
                     setSelectedBetId(
                       e.target.value ? Number(e.target.value) : null,
                     )
                   }
                 >
-                  <option value="">— pick a bet —</option>
+                  <option value="">
+                    {loading ? 'Loading markets…' : '— pick a bet —'}
+                  </option>
                   {bets.map((b) => {
                     const id = b.account.betId.toNumber()
                     const open = betIsOpen(b.account)
@@ -530,6 +571,10 @@ export default function App() {
                   })}
                 </select>
               </label>
+
+              {loading && (
+                <p className="muted load-hint">Fetching on-chain markets…</p>
+              )}
 
               {selected && (
                 <div className="question">
@@ -758,8 +803,8 @@ export default function App() {
                   <button
                     className="ghost"
                     type="button"
-                    disabled={busy}
-                    onClick={() => void refresh()}
+                    disabled={busy || loading}
+                    onClick={() => void refresh({ force: true })}
                   >
                     Refresh
                   </button>
