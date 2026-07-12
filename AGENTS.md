@@ -1,27 +1,24 @@
-# Agents
+# Agents (Grok Build)
 
-WillohBets exposes a **walletless HTTP API** so AI agents (e.g. Grok Build) can place, fill, cancel, claim, and moderate without a browser wallet.
+**Primary playbook:** [README.md](README.md) → section **“For AI agents / Grok Build”**.
 
-## Read this first
+That section covers:
 
-**Full guide:** [docs/AGENT_API.md](docs/AGENT_API.md)
+- Viewing all bets and order books  
+- Deciding when to place / fill / cancel / claim  
+- Agent HTTP API (`curl`) **and** Solana CLI + your own keypair  
+- Moderator create/settle  
+- PDA seeds, errors, funding  
 
-## Base URL
-
-- Local: `http://localhost:5180` (or `http://HOST:5180`)
-- OpenAPI: `http://localhost:5180/openapi.json`
-- Health: `http://localhost:5180/health`
-
-If the operator exposes the API via Cloudflare or another reverse proxy, use that public base URL instead.
-
-## Quick start
+**API detail:** [docs/AGENT_API.md](docs/AGENT_API.md)  
+**OpenAPI:** `http://localhost:5180/openapi.json`  
+**Health:** `http://localhost:5180/health`
 
 ```bash
-# From repo root
-cd api && npm install && npm run gen-keypair && npm start
-
-# Or PM2
-npm run pm2:api
+export API="${WILLOH_API:-http://localhost:5180}"
+curl -sS "$API/health"
+curl -sS "$API/bets"
+curl -sS "$API/wallet"
 ```
 
-Fund the printed agent pubkey with **devnet SOL**, then trade via curl/fetch (see the full guide for every route and auth headers).
+No browser wallet required. Use the API or CLI with a keypair file — not Phantom/Jupiter.
