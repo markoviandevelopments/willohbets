@@ -11,6 +11,7 @@ import {
   getBet,
   getOpenOrders,
   getPosition,
+  getActiveOnChainWallets,
   placeOrder,
   fillOrder,
   cancelOrder,
@@ -21,6 +22,12 @@ import {
   MAX_PRICE_BPS,
   PROGRAM_ID,
 } from './lib/program.mjs'
+import {
+  listUsernames,
+  setUsername,
+  recordVisit,
+  listActiveWallets,
+} from './lib/usernames.mjs'
 
 loadEnvFile()
 
@@ -370,6 +377,76 @@ function openApiSpec() {
           responses: { 200: { description: '{ ok, position }' } },
         },
       },
+      '/usernames': {
+        get: {
+          summary: 'Public username directory (wallet → name)',
+          security: [],
+          responses: {
+            200: {
+              description: '{ ok, entries: [{wallet,username,updatedAt}], map }',
+            },
+          },
+        },
+        post: {
+          summary: 'Assign username to a wallet (moderator)',
+          parameters: [
+            {
+              name: 'X-Moderator-Password',
+              in: 'header',
+              required: true,
+              schema: { type: 'string' },
+            },
+          ],
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['wallet'],
+                  properties: {
+                    wallet: { type: 'string' },
+                    username: {
+                      type: 'string',
+                      description: 'Empty string clears the name',
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: { 200: { description: '{ ok, wallet, username }' } },
+        },
+      },
+      '/wallets/active': {
+        get: {
+          summary:
+            'Wallets with on-chain activity or site visits (for mod naming)',
+          responses: {
+            200: {
+              description:
+                '{ ok, wallets: [{ wallet, username, lastSeen, named }] }',
+            },
+          },
+        },
+      },
+      '/visits': {
+        post: {
+          summary: 'Record that a wallet visited / connected (public)',
+          security: [],
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['wallet'],
+                  properties: { wallet: { type: 'string' } },
+                },
+              },
+            },
+          },
+          responses: { 200: { description: '{ ok, wallet, lastSeen, username }' } },
+        },
+      },
     },
   }
   return base
@@ -409,6 +486,22 @@ async function handler(req, res) {
     res.end(JSON.stringify(openApiSpec(), null, 2))
     return
   }
+  if (method === 'GET' && path === '/usernames') {
+    try {
+      return ok(res, listUsernames())
+    } catch (e) {
+      return fail(res, 500, errMsg(e))
+    }
+  }
+  if (method === 'POST' && path === '/visits') {
+    try {
+      const body = await readJson(req)
+      if (!body.wallet) return fail(res, 400, 'wallet required')
+      return ok(res, recordVisit(body.wallet))
+    } catch (e) {
+      return fail(res, 400, errMsg(e))
+    }
+  }
 
   // All other routes: optional API key
   if (!checkApiKey(req, res)) return
@@ -418,6 +511,28 @@ async function handler(req, res) {
     if (method === 'GET' && path === '/wallet') {
       const bal = await getBalance()
       return ok(res, bal)
+    }
+
+    if (method === 'GET' && path === '/wallets/active') {
+      let onChain = []
+      try {
+        onChain = await getActiveOnChainWallets()
+      } catch (e) {
+        console.error('[willohbets-api] active wallets on-chain:', e)
+      }
+      return ok(res, { wallets: listActiveWallets(onChain) })
+    }
+
+    if (method === 'POST' && path === '/usernames') {
+      const body = await readJson(req)
+      if (!checkModPassword(req, res, body)) return
+      if (!body.wallet) return fail(res, 400, 'wallet required')
+      const result = setUsername(
+        body.wallet,
+        body.username ?? body.name ?? '',
+        'moderator',
+      )
+      return ok(res, result)
     }
 
     if (method === 'GET' && path === '/market') {

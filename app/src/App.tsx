@@ -35,9 +35,19 @@ import {
   type PositionAccount,
 } from './market'
 import { OrderBookDepth } from './OrderBookDepth'
+import {
+  API_BASE,
+  assignUsername,
+  displayName,
+  fetchActiveWallets,
+  fetchUsernames,
+  recordWalletVisit,
+  type ActiveWallet,
+  type UsernameEntry,
+} from './apiBase'
 import './App.css'
 
-type Tab = 'trade' | 'history' | 'mod'
+type Tab = 'trade' | 'history' | 'names' | 'mod'
 
 function short(pk: string) {
   return `${pk.slice(0, 4)}…${pk.slice(-4)}`
@@ -86,8 +96,50 @@ export default function App() {
   const [qty, setQty] = useState(1)
   const [fillQty, setFillQty] = useState<Record<string, number>>({})
 
+  const [nameMap, setNameMap] = useState<Record<string, string>>({})
+  const [nameEntries, setNameEntries] = useState<UsernameEntry[]>([])
+  const [activeWallets, setActiveWallets] = useState<ActiveWallet[]>([])
+  const [modNameDrafts, setModNameDrafts] = useState<Record<string, string>>({})
+  const [modNameWallet, setModNameWallet] = useState('')
+  const [modNameUser, setModNameUser] = useState('')
+  const [nameStatus, setNameStatus] = useState('')
+
   const selectedBetIdRef = useRef(selectedBetId)
   selectedBetIdRef.current = selectedBetId
+  const visitedRef = useRef<string | null>(null)
+
+  const labelWallet = useCallback(
+    (pk: string) => displayName(pk, nameMap),
+    [nameMap],
+  )
+
+  const refreshNames = useCallback(async () => {
+    try {
+      const { map, entries } = await fetchUsernames()
+      setNameMap(map)
+      setNameEntries(entries)
+    } catch (e) {
+      console.error(e)
+    }
+  }, [])
+
+  const refreshActiveWallets = useCallback(async () => {
+    try {
+      const list = await fetchActiveWallets()
+      setActiveWallets(list)
+      setModNameDrafts((prev) => {
+        const next = { ...prev }
+        for (const w of list) {
+          if (next[w.wallet] === undefined) {
+            next[w.wallet] = w.username || ''
+          }
+        }
+        return next
+      })
+    } catch (e) {
+      console.error(e)
+    }
+  }, [])
 
   const openBets = useMemo(() => bets.filter((b) => betIsOpen(b.account)), [bets])
   const selected = useMemo(
@@ -163,10 +215,29 @@ export default function App() {
 
   useEffect(() => {
     void refresh()
+    void refreshNames()
     // Public RPC is tight on rate limits — poll gently
     const t = setInterval(() => void refresh(), 30_000)
-    return () => clearInterval(t)
-  }, [refresh])
+    const n = setInterval(() => void refreshNames(), 45_000)
+    return () => {
+      clearInterval(t)
+      clearInterval(n)
+    }
+  }, [refresh, refreshNames])
+
+  // Record visit when a wallet connects (for mod "seen" list)
+  useEffect(() => {
+    const pk = wallet.publicKey?.toBase58()
+    if (!pk || visitedRef.current === pk) return
+    visitedRef.current = pk
+    void recordWalletVisit(pk).then(() => {
+      if (isMod) void refreshActiveWallets()
+    })
+  }, [wallet.publicKey, isMod, refreshActiveWallets])
+
+  useEffect(() => {
+    if (isMod && tab === 'mod') void refreshActiveWallets()
+  }, [isMod, tab, refreshActiveWallets])
 
   // When user picks another bet, filter orders locally (instant) then fetch position
   useEffect(() => {
@@ -227,8 +298,21 @@ export default function App() {
       setModError('')
       setModPw('')
       setTab('mod')
+      void refreshActiveWallets()
     } else {
       setModError('Incorrect password')
+    }
+  }
+
+  const saveUsername = async (walletAddr: string, username: string) => {
+    setNameStatus('Saving…')
+    try {
+      await assignUsername(walletAddr, username.trim(), MODERATOR_PASSWORD)
+      setNameStatus(`Saved ${username.trim() || '(cleared)'} for ${short(walletAddr)}`)
+      await refreshNames()
+      await refreshActiveWallets()
+    } catch (err: unknown) {
+      setNameStatus(err instanceof Error ? err.message : String(err))
     }
   }
 
@@ -297,6 +381,13 @@ export default function App() {
           type="button"
         >
           History
+        </button>
+        <button
+          className={tab === 'names' ? 'active' : ''}
+          onClick={() => setTab('names')}
+          type="button"
+        >
+          Names
         </button>
         <button
           className={tab === 'mod' ? 'active' : ''}
@@ -451,7 +542,152 @@ export default function App() {
                     })}
                   </ul>
                 </div>
+
+                <div className="block">
+                  <h3>Assign usernames</h3>
+                  <p className="muted small">
+                    Give shorthands to wallets that have traded or connected.
+                    Names appear in Trade, History, and the public Names tab.
+                  </p>
+                  <div className="inline-form" style={{ marginBottom: '0.75rem' }}>
+                    <input
+                      type="text"
+                      placeholder="Wallet address"
+                      value={modNameWallet}
+                      onChange={(e) => setModNameWallet(e.target.value)}
+                    />
+                    <input
+                      type="text"
+                      placeholder="Username"
+                      maxLength={24}
+                      value={modNameUser}
+                      onChange={(e) => setModNameUser(e.target.value)}
+                    />
+                    <button
+                      className="primary"
+                      type="button"
+                      disabled={!modNameWallet.trim()}
+                      onClick={() =>
+                        void saveUsername(modNameWallet.trim(), modNameUser)
+                      }
+                    >
+                      Save
+                    </button>
+                  </div>
+                  <button
+                    className="ghost"
+                    type="button"
+                    onClick={() => void refreshActiveWallets()}
+                  >
+                    Refresh active wallets
+                  </button>
+                  {nameStatus && (
+                    <p className="muted small" style={{ marginTop: '0.5rem' }}>
+                      {nameStatus}
+                    </p>
+                  )}
+                  {activeWallets.length === 0 ? (
+                    <p className="muted small" style={{ marginTop: '0.75rem' }}>
+                      No active wallets yet — wait for connections or trades.
+                    </p>
+                  ) : (
+                    <ul className="resolve-list name-assign-list">
+                      {activeWallets.map((w) => (
+                        <li key={w.wallet}>
+                          <div>
+                            <strong className="name-chip">
+                              {w.username || '—'}
+                            </strong>
+                            <div className="mono muted small">{w.wallet}</div>
+                            {w.lastSeen && (
+                              <div className="muted small">
+                                last seen{' '}
+                                {new Date(w.lastSeen).toLocaleString()}
+                              </div>
+                            )}
+                          </div>
+                          <div className="resolve-actions name-assign-row">
+                            <input
+                              type="text"
+                              maxLength={24}
+                              placeholder="username"
+                              value={modNameDrafts[w.wallet] ?? ''}
+                              onChange={(e) =>
+                                setModNameDrafts((d) => ({
+                                  ...d,
+                                  [w.wallet]: e.target.value,
+                                }))
+                              }
+                            />
+                            <button
+                              className="secondary"
+                              type="button"
+                              onClick={() =>
+                                void saveUsername(
+                                  w.wallet,
+                                  modNameDrafts[w.wallet] ?? '',
+                                )
+                              }
+                            >
+                              Set
+                            </button>
+                            {w.named && (
+                              <button
+                                className="ghost"
+                                type="button"
+                                onClick={() => void saveUsername(w.wallet, '')}
+                              >
+                                Clear
+                              </button>
+                            )}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               </>
+            )}
+          </section>
+        )}
+
+        {tab === 'names' && (
+          <section className="card">
+            <div className="row">
+              <h2>Usernames</h2>
+              <button
+                className="ghost"
+                type="button"
+                onClick={() => void refreshNames()}
+              >
+                Refresh
+              </button>
+            </div>
+            <p className="muted small">
+              Public directory of moderator-assigned shorthands for wallets
+              active on WillohBets.
+            </p>
+            {nameEntries.length === 0 ? (
+              <p className="muted">No usernames assigned yet.</p>
+            ) : (
+              <table className="history-table">
+                <thead>
+                  <tr>
+                    <th>Username</th>
+                    <th>Wallet</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {nameEntries.map((e) => (
+                    <tr key={e.wallet}>
+                      <td>
+                        <strong className="name-chip">{e.username}</strong>
+                      </td>
+                      <td className="mono small">{e.wallet}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             )}
           </section>
         )}
@@ -486,6 +722,7 @@ export default function App() {
                 <tr>
                   <th>ID</th>
                   <th>Name</th>
+                  <th>Creator</th>
                   <th>Status</th>
                   <th>Outcome</th>
                   <th>Created</th>
@@ -497,10 +734,16 @@ export default function App() {
                 {bets.map((b) => {
                   const id = b.account.betId.toNumber()
                   const open = betIsOpen(b.account)
+                  const creatorPk = b.account.creator.toBase58()
                   return (
                     <tr key={b.publicKey.toBase58()}>
                       <td>#{id}</td>
                       <td>{b.account.name}</td>
+                      <td title={creatorPk}>
+                        <span className={nameMap[creatorPk] ? 'name-chip' : 'mono small'}>
+                          {labelWallet(creatorPk)}
+                        </span>
+                      </td>
                       <td>
                         <span className={open ? 'pill open' : 'pill settled'}>
                           {open ? 'Open' : 'Settled'}
@@ -836,6 +1079,8 @@ export default function App() {
                     <BookTable
                       rows={yesBids}
                       walletPk={wallet.publicKey?.toBase58()}
+                      labelWallet={labelWallet}
+                      nameMap={nameMap}
                       fillQty={fillQty}
                       setFillQty={setFillQty}
                       busy={busy || !tradingOpen}
@@ -856,6 +1101,8 @@ export default function App() {
                     <BookTable
                       rows={noBids}
                       walletPk={wallet.publicKey?.toBase58()}
+                      labelWallet={labelWallet}
+                      nameMap={nameMap}
                       fillQty={fillQty}
                       setFillQty={setFillQty}
                       busy={busy || !tradingOpen}
@@ -887,7 +1134,7 @@ export default function App() {
           <p className="muted small" style={{ margin: 0 }}>
             Agent API (no browser wallet):{' '}
             <a
-              href={`${import.meta.env.VITE_API_URL || 'https://willohbetsapi.immenseaccumulationonline.online'}/openapi.json`}
+              href={`${API_BASE}/openapi.json`}
               target="_blank"
               rel="noreferrer"
             >
@@ -895,7 +1142,7 @@ export default function App() {
             </a>
             {' · '}
             <a
-              href={`${import.meta.env.VITE_API_URL || 'https://willohbetsapi.immenseaccumulationonline.online'}/health`}
+              href={`${API_BASE}/health`}
               target="_blank"
               rel="noreferrer"
             >
@@ -911,8 +1158,7 @@ export default function App() {
             </a>
             <br />
             <span className="mono" style={{ fontSize: '0.8em' }}>
-              {import.meta.env.VITE_API_URL ||
-                'https://willohbetsapi.immenseaccumulationonline.online'}
+              {API_BASE}
             </span>
           </p>
         </section>
@@ -924,6 +1170,8 @@ export default function App() {
 function BookTable({
   rows,
   walletPk,
+  labelWallet,
+  nameMap,
   fillQty,
   setFillQty,
   busy,
@@ -932,6 +1180,8 @@ function BookTable({
 }: {
   rows: OrderBookEntry[]
   walletPk?: string
+  labelWallet: (pk: string) => string
+  nameMap: Record<string, string>
   fillQty: Record<string, number>
   setFillQty: (v: Record<string, number>) => void
   busy: boolean
@@ -958,12 +1208,18 @@ function BookTable({
           const price = o.account.priceBps.toNumber()
           const rem = o.account.qtyRemaining.toNumber()
           const q = fillQty[key] ?? Math.min(1, rem)
-          const mine = walletPk === o.account.owner.toBase58()
+          const ownerPk = o.account.owner.toBase58()
+          const mine = walletPk === ownerPk
           return (
             <tr key={key}>
               <td>{(price / 100).toFixed(1)}%</td>
               <td>{rem}</td>
-              <td className="mono">{short(o.account.owner.toBase58())}</td>
+              <td
+                className={nameMap[ownerPk] ? 'name-chip' : 'mono'}
+                title={ownerPk}
+              >
+                {labelWallet(ownerPk)}
+              </td>
               <td className="muted small">
                 {takerCostSol(price, q).toFixed(6)} SOL
               </td>

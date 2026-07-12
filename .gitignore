@@ -16,3 +16,4 @@ logs/
 api/agent-keypair.json
 api/node_modules
 api/.env
+api/data/

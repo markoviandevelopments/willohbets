@@ -302,6 +302,20 @@ export async function getBalance() {
   }
 }
 
+/** Unique wallet pubkeys that created bets or placed orders. */
+export async function getActiveOnChainWallets() {
+  const snap = await getSnapshot()
+  const set = new Set()
+  if (snap.market?.authority) set.add(snap.market.authority)
+  for (const b of snap.bets || []) {
+    if (b.creator) set.add(b.creator)
+  }
+  for (const o of snap.orders || []) {
+    if (o.owner) set.add(o.owner)
+  }
+  return [...set]
+}
+
 export async function getSnapshot() {
   const program = getProgram()
   const marketEntry = await fetchMarketAccount(program)

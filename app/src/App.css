@@ -181,6 +181,28 @@ h3.no {
   font-size: 0.9rem;
 }
 
+.name-chip {
+  color: var(--yes);
+  font-weight: 700;
+}
+
+.name-assign-list .name-assign-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.name-assign-list .name-assign-row input {
+  width: 8rem;
+  margin: 0;
+  padding: 0.4rem 0.55rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text);
+}
+
 .outcome-inline {
   color: var(--warn);
   font-weight: 700;
