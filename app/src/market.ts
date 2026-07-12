@@ -402,3 +402,220 @@ export function setModeratorSession(on: boolean) {
     /* ignore */
   }
 }
+
+export type DepthLevel = {
+  /** Price as % of full payout (0–100) */
+  pricePct: number
+  priceBps: number
+  qty: number
+  /** Cumulative qty from best price through this level */
+  cumulative: number
+  side: 'yes' | 'no'
+}
+
+/** Aggregate open orders into depth levels (best price first). */
+export function buildDepth(
+  orders: OrderBookEntry[],
+  side: 'yes' | 'no',
+): DepthLevel[] {
+  const filtered = orders.filter((o) =>
+    side === 'yes' ? sideIsYes(o.account.side) : !sideIsYes(o.account.side),
+  )
+  const byPrice = new Map<number, number>()
+  for (const o of filtered) {
+    const p = o.account.priceBps.toNumber()
+    const q = o.account.qtyRemaining.toNumber()
+    byPrice.set(p, (byPrice.get(p) ?? 0) + q)
+  }
+  const levels = [...byPrice.entries()]
+    .map(([priceBps, qty]) => ({
+      priceBps,
+      pricePct: priceBps / 100,
+      qty,
+      cumulative: 0,
+      side,
+    }))
+    .sort((a, b) => b.priceBps - a.priceBps)
+
+  let cum = 0
+  for (const lvl of levels) {
+    cum += lvl.qty
+    lvl.cumulative = cum
+  }
+  return levels
+}
+
+export type PositionMark = {
+  totalPaidSol: number
+  /** Value that can be locked using resting opposite liquidity */
+  coveredValueSol: number
+  yesCovered: number
+  noCovered: number
+  yesUncovered: number
+  noUncovered: number
+  /** Residual marked at remaining same-side bids (if any depth left) */
+  residualBidValueSol: number
+  /** coveredValue + residualBidValue */
+  marketValueSol: number
+  /** marketValue - totalPaid */
+  unrealizedPnlSol: number
+  hedgeCostSol: number
+  note: string
+}
+
+/**
+ * Mark position against the resting book.
+ *
+ * - Negate YES by taking YES bids (taker receives NO, pays complement).
+ * - Negate NO by taking NO bids (taker receives YES, pays complement).
+ * - Fully hedged units lock in 1 contract payout − hedge cost.
+ * - Any leftover inventory is marked at remaining same-side bids (what
+ *   buyers are willing to pay for that side), if depth remains.
+ */
+export function markPositionAgainstBook(
+  position: PositionAccount | null,
+  yesBids: OrderBookEntry[],
+  noBids: OrderBookEntry[],
+): PositionMark | null {
+  if (!position) return null
+
+  const yesQty = position.yesContracts.toNumber()
+  const noQty = position.noContracts.toNumber()
+  const yesCost = position.yesCostLamports.toNumber() / 1e9
+  const noCost = position.noCostLamports.toNumber() / 1e9
+  const totalPaidSol = yesCost + noCost
+
+  if (yesQty === 0 && noQty === 0) {
+    return {
+      totalPaidSol,
+      coveredValueSol: 0,
+      yesCovered: 0,
+      noCovered: 0,
+      yesUncovered: 0,
+      noUncovered: 0,
+      residualBidValueSol: 0,
+      marketValueSol: 0,
+      unrealizedPnlSol: -totalPaidSol,
+      hedgeCostSol: 0,
+      note: 'No contracts held',
+    }
+  }
+
+  // 1) Internal net: YES+NO pairs already lock full payout with no extra cost
+  const internalPairs = Math.min(yesQty, noQty)
+  const internalValueSol = internalPairs * CONTRACT_SOL
+  let yesLeft = yesQty - internalPairs
+  let noLeft = noQty - internalPairs
+
+  // 2) Book hedge residual longs against opposite resting liquidity
+  const yesDepth = cloneDepth(yesBids)
+  const noDepth = cloneDepth(noBids)
+
+  // Hedge leftover YES → buy NO by taking YES bids
+  const hedgeYes = walkTakeOpposite(yesDepth, yesLeft)
+  // Hedge leftover NO → buy YES by taking NO bids
+  const hedgeNo = walkTakeOpposite(noDepth, noLeft)
+
+  const yesCovered = internalPairs + hedgeYes.filled
+  const noCovered = internalPairs + hedgeNo.filled
+  const hedgeCostSol = hedgeYes.costSol + hedgeNo.costSol
+  // Hedged-via-book units: lock CONTRACT after paying hedge cost
+  const bookHedgeValueSol =
+    hedgeYes.filled * CONTRACT_SOL -
+    hedgeYes.costSol +
+    (hedgeNo.filled * CONTRACT_SOL - hedgeNo.costSol)
+  const coveredValueSol = internalValueSol + bookHedgeValueSol
+
+  const yesUncovered = yesLeft - hedgeYes.filled
+  const noUncovered = noLeft - hedgeNo.filled
+
+  // 3) Residual: mark-to-bid on remaining same-side depth
+  const residualBidValueSol =
+    walkSellToBids(yesDepth, yesUncovered) + walkSellToBids(noDepth, noUncovered)
+
+  const marketValueSol = coveredValueSol + residualBidValueSol
+  const uncoveredUnits = yesUncovered + noUncovered
+  let note = ''
+  if (uncoveredUnits === 0) {
+    if (hedgeYes.filled + hedgeNo.filled > 0 && internalPairs > 0) {
+      note = 'Fully covered (internal pairs + book hedge)'
+    } else if (internalPairs > 0) {
+      note = 'Fully covered by internal YES/NO pairs'
+    } else {
+      note = 'Fully covered by resting opposite-side liquidity'
+    }
+  } else if (coveredValueSol > 0 && residualBidValueSol > 0) {
+    note = 'Partially covered; residual marked to remaining bids'
+  } else if (coveredValueSol > 0) {
+    note = `Partially covered; ${uncoveredUnits} uncovered (no residual bid depth)`
+  } else if (residualBidValueSol > 0) {
+    note = 'No hedge depth; marked to same-side bids only'
+  } else {
+    note = 'Insufficient book depth to mark position'
+  }
+
+  return {
+    totalPaidSol,
+    coveredValueSol,
+    yesCovered,
+    noCovered,
+    yesUncovered,
+    noUncovered,
+    residualBidValueSol,
+    marketValueSol,
+    unrealizedPnlSol: marketValueSol - totalPaidSol,
+    hedgeCostSol,
+    note,
+  }
+}
+
+type MutableLevel = { priceBps: number; qty: number }
+
+function cloneDepth(orders: OrderBookEntry[]): MutableLevel[] {
+  const byPrice = new Map<number, number>()
+  for (const o of orders) {
+    const p = o.account.priceBps.toNumber()
+    const q = o.account.qtyRemaining.toNumber()
+    byPrice.set(p, (byPrice.get(p) ?? 0) + q)
+  }
+  return [...byPrice.entries()]
+    .map(([priceBps, qty]) => ({ priceBps, qty }))
+    .sort((a, b) => b.priceBps - a.priceBps)
+}
+
+/** Take opposite side of resting bids: pay complement, consume depth. */
+function walkTakeOpposite(
+  depth: MutableLevel[],
+  need: number,
+): { filled: number; costSol: number } {
+  let needLeft = need
+  let filled = 0
+  let costSol = 0
+  for (const lvl of depth) {
+    if (needLeft <= 0) break
+    if (lvl.qty <= 0) continue
+    const take = Math.min(needLeft, lvl.qty)
+    const complement = (PRICE_BPS_SCALE - lvl.priceBps) / PRICE_BPS_SCALE
+    costSol += take * complement * CONTRACT_SOL
+    lvl.qty -= take
+    needLeft -= take
+    filled += take
+  }
+  return { filled, costSol }
+}
+
+/** Mark residual inventory at remaining bid prices (sell-to-bid). */
+function walkSellToBids(depth: MutableLevel[], qty: number): number {
+  let left = qty
+  let value = 0
+  for (const lvl of depth) {
+    if (left <= 0) break
+    if (lvl.qty <= 0) continue
+    const take = Math.min(left, lvl.qty)
+    const px = lvl.priceBps / PRICE_BPS_SCALE
+    value += take * px * CONTRACT_SOL
+    lvl.qty -= take
+    left -= take
+  }
+  return value
+}

@@ -23,6 +23,7 @@ import {
   fillOrder,
   initializeMarket,
   isModeratorSession,
+  markPositionAgainstBook,
   outcomeLabel,
   placeOrder,
   setModeratorSession,
@@ -33,6 +34,7 @@ import {
   type OrderBookEntry,
   type PositionAccount,
 } from './market'
+import { OrderBookDepth } from './OrderBookDepth'
 import './App.css'
 
 type Tab = 'trade' | 'history' | 'mod'
@@ -215,6 +217,11 @@ export default function App() {
             b.account.priceBps.toNumber() - a.account.priceBps.toNumber(),
         ),
     [orders],
+  )
+
+  const positionMark = useMemo(
+    () => markPositionAgainstBook(position, yesBids, noBids),
+    [position, yesBids, noBids],
   )
 
   return (
@@ -624,39 +631,97 @@ export default function App() {
                 <section className="card">
                   <h2>Your position</h2>
                   {position ? (
-                    <ul className="pos">
-                      <li>
-                        <div className="pos-row">
-                          <span>
-                            YES:{' '}
-                            <strong>{position.yesContracts.toString()}</strong>
-                          </span>
-                          <span className="muted small">
-                            {formatAvg(
-                              position.yesCostLamports,
-                              position.yesContracts,
-                            )}
-                          </span>
+                    <>
+                      <ul className="pos">
+                        <li>
+                          <div className="pos-row">
+                            <span>
+                              YES:{' '}
+                              <strong>
+                                {position.yesContracts.toString()}
+                              </strong>
+                            </span>
+                            <span className="muted small">
+                              {formatAvg(
+                                position.yesCostLamports,
+                                position.yesContracts,
+                              )}
+                            </span>
+                          </div>
+                        </li>
+                        <li>
+                          <div className="pos-row">
+                            <span>
+                              NO:{' '}
+                              <strong>
+                                {position.noContracts.toString()}
+                              </strong>
+                            </span>
+                            <span className="muted small">
+                              {formatAvg(
+                                position.noCostLamports,
+                                position.noContracts,
+                              )}
+                            </span>
+                          </div>
+                        </li>
+                        <li>
+                          Claimed:{' '}
+                          <strong>{position.claimed ? 'yes' : 'no'}</strong>
+                        </li>
+                      </ul>
+                      {positionMark && (
+                        <div className="mark-box">
+                          <div className="pos-row">
+                            <span className="muted small">Total paid</span>
+                            <strong>
+                              {positionMark.totalPaidSol.toFixed(6)} SOL
+                            </strong>
+                          </div>
+                          <div className="pos-row">
+                            <span className="muted small">
+                              Market value (book)
+                            </span>
+                            <strong
+                              className={
+                                positionMark.marketValueSol >=
+                                positionMark.totalPaidSol
+                                  ? 'up'
+                                  : 'down'
+                              }
+                            >
+                              {positionMark.marketValueSol.toFixed(6)} SOL
+                            </strong>
+                          </div>
+                          <div className="pos-row">
+                            <span className="muted small">Unrealized PnL</span>
+                            <strong
+                              className={
+                                positionMark.unrealizedPnlSol >= 0
+                                  ? 'up'
+                                  : 'down'
+                              }
+                            >
+                              {positionMark.unrealizedPnlSol >= 0 ? '+' : ''}
+                              {positionMark.unrealizedPnlSol.toFixed(6)} SOL
+                            </strong>
+                          </div>
+                          <div className="pos-row mark-detail">
+                            <span className="muted small">
+                              Hedged YES {positionMark.yesCovered}/
+                              {position.yesContracts.toString()} · NO{' '}
+                              {positionMark.noCovered}/
+                              {position.noContracts.toString()}
+                            </span>
+                          </div>
+                          <p className="muted small mark-note">
+                            {positionMark.note}. Hedge uses opposite fills on
+                            resting bids (pay complement). Residual is
+                            mark-to-bid on leftover same-side depth.
+                          </p>
                         </div>
-                      </li>
-                      <li>
-                        <div className="pos-row">
-                          <span>
-                            NO: <strong>{position.noContracts.toString()}</strong>
-                          </span>
-                          <span className="muted small">
-                            {formatAvg(
-                              position.noCostLamports,
-                              position.noContracts,
-                            )}
-                          </span>
-                        </div>
-                      </li>
-                      <li>
-                        Claimed:{' '}
-                        <strong>{position.claimed ? 'yes' : 'no'}</strong>
-                      </li>
-                    </ul>
+                      )}
+                    </>
                   ) : (
                     <p className="muted">No matched position on this bet.</p>
                   )}
@@ -699,6 +764,7 @@ export default function App() {
                     Refresh
                   </button>
                 </div>
+                <OrderBookDepth yesBids={yesBids} noBids={noBids} />
                 <div className="book">
                   <div>
                     <h3 className="yes">YES bids</h3>

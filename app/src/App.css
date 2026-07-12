@@ -375,6 +375,133 @@ button:disabled {
   flex-wrap: wrap;
 }
 
+.mark-box {
+  margin-top: 0.85rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.2);
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.mark-box .up {
+  color: var(--yes);
+}
+.mark-box .down {
+  color: var(--no);
+}
+
+.mark-detail {
+  margin-top: 0.15rem;
+}
+
+.mark-note {
+  margin: 0.25rem 0 0;
+  line-height: 1.35;
+}
+
+.depth-panel {
+  margin-bottom: 1.15rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.depth-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.depth-title {
+  margin: 0;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.depth-chart {
+  width: 100%;
+  min-height: 220px;
+}
+
+.depth-empty {
+  margin: 0 0 0.75rem;
+}
+
+.depth-ladder {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-top: 0.75rem;
+}
+
+.ladder-head {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.4rem;
+}
+
+.ladder-head.yes {
+  color: var(--yes);
+}
+.ladder-head.no {
+  color: var(--no);
+}
+
+.ladder-row {
+  display: grid;
+  grid-template-columns: 3rem 1fr auto;
+  gap: 0.45rem;
+  align-items: center;
+  margin-bottom: 0.3rem;
+  font-size: 0.8rem;
+}
+
+.ladder-price {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.ladder-bar-track {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+
+.ladder-bar {
+  height: 100%;
+  border-radius: 999px;
+  min-width: 2px;
+}
+
+.ladder-bar.yes {
+  background: linear-gradient(90deg, rgba(20, 241, 149, 0.35), #14f195);
+}
+
+.ladder-bar.no {
+  background: linear-gradient(90deg, rgba(244, 63, 94, 0.35), #f43f5e);
+}
+
+.ladder-qty {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+@media (max-width: 860px) {
+  .depth-ladder {
+    grid-template-columns: 1fr;
+  }
+}
+
 .mod-form {
   display: flex;
   gap: 0.5rem;
